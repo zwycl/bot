@@ -10,7 +10,6 @@ from discord import Guild, HTTPException, Member, Message, Reaction, User
 from discord.ext.commands import Context
 
 from bot import constants
-from bot.api import ResponseCodeError
 from bot.bot import Bot
 
 log = logging.getLogger(__name__)
@@ -149,8 +148,8 @@ class Syncer(abc.ABC):
         raise NotImplementedError  # pragma: no cover
 
     @abc.abstractmethod
-    async def _sync(self, diff: _Diff) -> None:
-        """Perform the API calls for synchronisation."""
+    def _sync_coroutines(self, diff: _Diff) -> t.Iterator[t.Coroutine]:
+        """Yield coroutines that perform API calls for synchronisation."""
         raise NotImplementedError  # pragma: no cover
 
     async def _get_confirmation_result(
@@ -210,21 +209,26 @@ class Syncer(abc.ABC):
         # where notifications came from.
         mention = self._CORE_DEV_MENTION if author.bot else ""
 
-        try:
-            await self._sync(diff)
-        except ResponseCodeError as e:
-            log.exception(f"{self.name} syncer failed!")
+        failures = 0
+        results = await asyncio.gather(*self._sync_coroutines(diff), return_exceptions=True)
 
-            # Don't show response text because it's probably some really long HTML.
-            results = f"status {e.status}\n```{e.response_json or 'See log output for details'}```"
-            content = f":x: {mention}Synchronisation of {self.name}s failed: {results}"
-        else:
-            results = ", ".join(f"{name} `{total}`" for name, total in totals.items())
-            log.info(f"{self.name} syncer finished: {results}.")
-            content = f":ok_hand: {mention}Synchronisation of {self.name}s complete: {results}"
+        for result in results:
+            if isinstance(result, Exception):
+                log.exception(f"{self.name} syncer encountered a failure.", exc_info=result)
+                failures += 1
+
+        emoji = "ok_hand"
+        result_totals = ", ".join(f"{name} `{total}`" for name, total in totals.items())
+
+        if failures:
+            emoji = "x" if failures == diff_size else "warning"
+            result_totals += f"; `{failures}` failed"
+
+        log.info(f"{self.name} syncer finished: {result_totals}.")
 
         if message:
-            await message.edit(content=content)
+            msg = f":{emoji}: {mention}Synchronisation of `{diff_size}` {self.name}s completed: "
+            await message.edit(content=msg + result_totals)
 
 
 class RoleSyncer(Syncer):
@@ -264,19 +268,19 @@ class RoleSyncer(Syncer):
 
         return _Diff(roles_to_create, roles_to_update, roles_to_delete)
 
-    async def _sync(self, diff: _Diff) -> None:
-        """Synchronise the database with the role cache of `guild`."""
+    def _sync_coroutines(self, diff: _Diff) -> t.Iterator[t.Coroutine]:
+        """Yield coroutines that synchronise the database with the role cache of `guild`."""
         log.trace("Syncing created roles...")
         for role in diff.created:
-            await self.bot.api_client.post('bot/roles', json=role._asdict())
+            yield self.bot.api_client.post('bot/roles', json=role._asdict())
 
         log.trace("Syncing updated roles...")
         for role in diff.updated:
-            await self.bot.api_client.put(f'bot/roles/{role.id}', json=role._asdict())
+            yield self.bot.api_client.put(f'bot/roles/{role.id}', json=role._asdict())
 
         log.trace("Syncing deleted roles...")
         for role in diff.deleted:
-            await self.bot.api_client.delete(f'bot/roles/{role.id}')
+            yield self.bot.api_client.delete(f'bot/roles/{role.id}')
 
 
 class UserSyncer(Syncer):
@@ -336,12 +340,12 @@ class UserSyncer(Syncer):
 
         return _Diff(users_to_create, users_to_update, None)
 
-    async def _sync(self, diff: _Diff) -> None:
-        """Synchronise the database with the user cache of `guild`."""
+    def _sync_coroutines(self, diff: _Diff) -> t.Iterator[t.Coroutine]:
+        """Yield coroutines that synchronise the database with the user cache of `guild`."""
         log.trace("Syncing created users...")
         for user in diff.created:
-            await self.bot.api_client.post('bot/users', json=user._asdict())
+            yield self.bot.api_client.post('bot/users', json=user._asdict())
 
         log.trace("Syncing updated users...")
         for user in diff.updated:
-            await self.bot.api_client.put(f'bot/users/{user.id}', json=user._asdict())
+            yield self.bot.api_client.put(f'bot/users/{user.id}', json=user._asdict())
