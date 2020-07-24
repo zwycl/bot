@@ -182,6 +182,32 @@ class Syncer(abc.ABC):
 
         return True, message
 
+    async def _send_results(
+        self,
+        success_totals: t.Dict[str, int],
+        failures: int,
+        mention: bool,
+        message: t.Optional[Message]
+    ) -> None:
+        """Log and optionally edit `message` with the results of a sync."""
+        diff_size = sum(success_totals.values()) + failures
+        emoji = "ok_hand"
+        result_totals = ", ".join(f"{name} `{total}`" for name, total in success_totals.items())
+
+        if failures:
+            emoji = "x" if failures == diff_size else "warning"
+            result_totals += f"; `{failures}` failed"
+
+        log.info(f"{self.name} syncer finished: {result_totals}.")
+
+        if message:
+            # Preserve the core-dev role mention in the message edits so users aren't confused about
+            # where notifications came from.
+            mention = self._CORE_DEV_MENTION if mention else ""
+
+            msg = f":{emoji}: {mention}Synchronisation of `{diff_size}` {self.name}s completed: "
+            await message.edit(content=msg + result_totals)
+
     async def sync(self, guild: Guild, ctx: t.Optional[Context] = None) -> None:
         """
         Synchronise the database with the cache of `guild`.
@@ -212,10 +238,6 @@ class Syncer(abc.ABC):
         if not confirmed:
             return
 
-        # Preserve the core-dev role mention in the message edits so users aren't confused about
-        # where notifications came from.
-        mention = self._CORE_DEV_MENTION if author.bot else ""
-
         failures = 0
         zipped = zip(*self._sync_coroutines(diff))
 
@@ -235,18 +257,7 @@ class Syncer(abc.ABC):
                     failures += 1
                     totals[type_] -= 1
 
-        emoji = "ok_hand"
-        result_totals = ", ".join(f"{name} `{total}`" for name, total in totals.items())
-
-        if failures:
-            emoji = "x" if failures == diff_size else "warning"
-            result_totals += f"; `{failures}` failed"
-
-        log.info(f"{self.name} syncer finished: {result_totals}.")
-
-        if message:
-            msg = f":{emoji}: {mention}Synchronisation of `{diff_size}` {self.name}s completed: "
-            await message.edit(content=msg + result_totals)
+        await self._send_results(totals, failures, author.bot, message)
 
 
 class RoleSyncer(Syncer):
