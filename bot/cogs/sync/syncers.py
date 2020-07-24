@@ -212,14 +212,22 @@ class Syncer(abc.ABC):
         mention = self._CORE_DEV_MENTION if author.bot else ""
 
         failures = 0
-        types, coroutines = zip(*self._sync_coroutines(diff))
-        results = await asyncio.gather(*coroutines, return_exceptions=True)
+        zipped = zip(*self._sync_coroutines(diff))
 
-        for type_, result in zip(types, results):
-            if isinstance(result, Exception):
-                log.exception(f"{self.name} syncer encountered a failure.", exc_info=result)
-                failures += 1
-                totals[type_] -= 1
+        try:
+            # The zip is done outside the try block to narrow the scope of a ValueError.
+            types, coroutines = zipped
+        except ValueError:
+            # This happens if _sync_coroutines doesn't yield anything.
+            pass
+        else:
+            results = await asyncio.gather(*coroutines, return_exceptions=True)
+
+            for type_, result in zip(types, results):
+                if isinstance(result, Exception):
+                    log.exception(f"{self.name} syncer encountered a failure.", exc_info=result)
+                    failures += 1
+                    totals[type_] -= 1
 
         emoji = "ok_hand"
         result_totals = ", ".join(f"{name} `{total}`" for name, total in totals.items())
