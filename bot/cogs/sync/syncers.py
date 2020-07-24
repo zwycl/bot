@@ -203,6 +203,11 @@ class Syncer(abc.ABC):
         totals = {k: len(v) for k, v in diff_dict.items() if v is not None}
         diff_size = sum(totals.values())
 
+        if not diff_size:
+            if message:
+                await message.edit(content=f":warning: There are no changed {self.name}s to sync.")
+            return
+
         confirmed, message = await self._get_confirmation_result(diff_size, author, message)
         if not confirmed:
             return
@@ -219,6 +224,7 @@ class Syncer(abc.ABC):
             types, coroutines = zipped
         except ValueError:
             # This happens if _sync_coroutines doesn't yield anything.
+            # Most likely won't happen since a diff_size of 0 is checked above, but let's be safe.
             pass
         else:
             results = await asyncio.gather(*coroutines, return_exceptions=True)
