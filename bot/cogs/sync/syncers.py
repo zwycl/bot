@@ -20,6 +20,8 @@ _Role = namedtuple('Role', ('id', 'name', 'colour', 'permissions', 'position'))
 _User = namedtuple('User', ('id', 'name', 'discriminator', 'roles', 'in_guild'))
 _Diff = namedtuple('Diff', ('created', 'updated', 'deleted'))
 
+_SyncCoroutines = t.Iterator[t.Tuple[str, t.Coroutine]]
+
 
 class Syncer(abc.ABC):
     """Base class for synchronising the database with objects in the Discord cache."""
@@ -148,8 +150,8 @@ class Syncer(abc.ABC):
         raise NotImplementedError  # pragma: no cover
 
     @abc.abstractmethod
-    def _sync_coroutines(self, diff: _Diff) -> t.Iterator[t.Coroutine]:
-        """Yield coroutines that perform API calls for synchronisation."""
+    def _sync_coroutines(self, diff: _Diff) -> _SyncCoroutines:
+        """Yield pairs of diff types and coroutines that perform API calls for synchronisation."""
         raise NotImplementedError  # pragma: no cover
 
     async def _get_confirmation_result(
@@ -210,12 +212,14 @@ class Syncer(abc.ABC):
         mention = self._CORE_DEV_MENTION if author.bot else ""
 
         failures = 0
-        results = await asyncio.gather(*self._sync_coroutines(diff), return_exceptions=True)
+        types, coroutines = zip(*self._sync_coroutines(diff))
+        results = await asyncio.gather(*coroutines, return_exceptions=True)
 
-        for result in results:
+        for type_, result in zip(types, results):
             if isinstance(result, Exception):
                 log.exception(f"{self.name} syncer encountered a failure.", exc_info=result)
                 failures += 1
+                totals[type_] -= 1
 
         emoji = "ok_hand"
         result_totals = ", ".join(f"{name} `{total}`" for name, total in totals.items())
@@ -268,19 +272,19 @@ class RoleSyncer(Syncer):
 
         return _Diff(roles_to_create, roles_to_update, roles_to_delete)
 
-    def _sync_coroutines(self, diff: _Diff) -> t.Iterator[t.Coroutine]:
-        """Yield coroutines that synchronise the database with the role cache of `guild`."""
+    def _sync_coroutines(self, diff: _Diff) -> _SyncCoroutines:
+        """Yield pairs of diff types and coroutines that synchronise the DB with a role `diff`."""
         log.trace("Syncing created roles...")
         for role in diff.created:
-            yield self.bot.api_client.post('bot/roles', json=role._asdict())
+            yield "created", self.bot.api_client.post('bot/roles', json=role._asdict())
 
         log.trace("Syncing updated roles...")
         for role in diff.updated:
-            yield self.bot.api_client.put(f'bot/roles/{role.id}', json=role._asdict())
+            yield "updated", self.bot.api_client.put(f'bot/roles/{role.id}', json=role._asdict())
 
         log.trace("Syncing deleted roles...")
         for role in diff.deleted:
-            yield self.bot.api_client.delete(f'bot/roles/{role.id}')
+            yield "deleted", self.bot.api_client.delete(f'bot/roles/{role.id}')
 
 
 class UserSyncer(Syncer):
@@ -340,12 +344,12 @@ class UserSyncer(Syncer):
 
         return _Diff(users_to_create, users_to_update, None)
 
-    def _sync_coroutines(self, diff: _Diff) -> t.Iterator[t.Coroutine]:
-        """Yield coroutines that synchronise the database with the user cache of `guild`."""
+    def _sync_coroutines(self, diff: _Diff) -> _SyncCoroutines:
+        """Yield pairs of diff types and coroutines that synchronise the DB with a user `diff`."""
         log.trace("Syncing created users...")
         for user in diff.created:
-            yield self.bot.api_client.post('bot/users', json=user._asdict())
+            yield "created", self.bot.api_client.post('bot/users', json=user._asdict())
 
         log.trace("Syncing updated users...")
         for user in diff.updated:
-            yield self.bot.api_client.put(f'bot/users/{user.id}', json=user._asdict())
+            yield "updated", self.bot.api_client.put(f'bot/users/{user.id}', json=user._asdict())
