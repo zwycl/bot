@@ -39,6 +39,7 @@ flake8-tidy-imports = "~=4.0"
 flake8-todo = "~=0.7"
 pep8-naming = "~=0.9"
 pre-commit = "~=2.1"
+unittest-parallel = "~=0.8.7"
 unittest-xml-reporting = "~=3.0"
 
 [requires]
